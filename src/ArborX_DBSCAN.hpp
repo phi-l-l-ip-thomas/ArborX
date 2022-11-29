@@ -20,6 +20,7 @@
 #include <ArborX_HyperBox.hpp>
 #include <ArborX_HyperSphere.hpp>
 #include <ArborX_LinearBVH.hpp>
+#include <ArborX_BruteForce.hpp>
 #include <ArborX_Sphere.hpp>
 
 namespace ArborX
@@ -206,6 +207,8 @@ struct Parameters
   bool _verbose = false;
   // Algorithm implementation (FDBSCAN or FDBSCAN-DenseBox)
   Implementation _implementation = Implementation::FDBSCAN_DenseBox;
+  // Tree type (construct-and-traverse bvh or use brute force)
+  std::string _tree;
 
   Parameters &setVerbosity(bool verbose)
   {
@@ -215,6 +218,11 @@ struct Parameters
   Parameters &setImplementation(Implementation impl)
   {
     _implementation = impl;
+    return *this;
+  }
+  Parameters &setTree(std::string tree)
+  {
+    _tree = tree;
     return *this;
   }
 };
@@ -268,43 +276,100 @@ dbscan(ExecutionSpace const &exec_space, Primitives const &primitives,
 
   if (parameters._implementation == DBSCAN::Implementation::FDBSCAN)
   {
-    // Build the tree
-    Kokkos::Profiling::pushRegion("ArborX::DBSCAN::tree_construction");
-    BasicBoundingVolumeHierarchy<MemorySpace, Box> bvh(exec_space, primitives);
-    Kokkos::Profiling::popRegion();
 
-    Kokkos::Profiling::pushRegion("ArborX::DBSCAN::clusters");
-    auto const predicates =
-        Details::PrimitivesWithRadius<Primitives>{primitives, eps};
-    if (is_special_case)
+    if (parameters._tree == "bvh")
     {
-      // Perform the queries and build clusters through callback
-      using CorePoints = Details::CCSCorePoints;
-      CorePoints core_points;
-      Kokkos::Profiling::pushRegion("ArborX::DBSCAN::clusters::query");
-      bvh.query(
-          exec_space, predicates,
-          Details::FDBSCANCallback<UnionFind, CorePoints>{labels, core_points});
-      Kokkos::Profiling::popRegion();
-    }
-    else
-    {
-      // Determine core points
-      Kokkos::Profiling::pushRegion("ArborX::DBSCAN::clusters::num_neigh");
-      Kokkos::resize(num_neigh, n);
-      bvh.query(exec_space, predicates,
-                Details::CountUpToN<MemorySpace>{num_neigh, core_min_size});
+
+      // Build the tree
+      Kokkos::Profiling::pushRegion("ArborX::DBSCAN::tree_construction");
+      BasicBoundingVolumeHierarchy<MemorySpace, Box> bvh(exec_space, primitives);
       Kokkos::Profiling::popRegion();
 
-      using CorePoints = Details::DBSCANCorePoints<MemorySpace>;
+      Kokkos::Profiling::pushRegion("ArborX::DBSCAN::clusters");
+      auto const predicates =
+          Details::PrimitivesWithRadius<Primitives>{primitives, eps};
+      if (is_special_case)
+      {
+        // Perform the queries and build clusters through callback
+        using CorePoints = Details::CCSCorePoints;
+        CorePoints core_points;
+        Kokkos::Profiling::pushRegion("ArborX::DBSCAN::clusters::query");
+        bvh.query(
+            exec_space, predicates,
+            Details::FDBSCANCallback<UnionFind, CorePoints>{labels, core_points});
+        Kokkos::Profiling::popRegion();
+      }
+      else
+      {
+        // Determine core points
+        Kokkos::Profiling::pushRegion("ArborX::DBSCAN::clusters::num_neigh");
+        Kokkos::resize(num_neigh, n);
+        bvh.query(exec_space, predicates,
+                  Details::CountUpToN<MemorySpace>{num_neigh, core_min_size});
+        Kokkos::Profiling::popRegion();
 
-      // Perform the queries and build clusters through callback
-      Kokkos::Profiling::pushRegion("ArborX::DBSCAN::clusters::query");
-      bvh.query(exec_space, predicates,
-                Details::FDBSCANCallback<UnionFind, CorePoints>{
-                    labels, CorePoints{num_neigh, core_min_size}});
+        using CorePoints = Details::DBSCANCorePoints<MemorySpace>;
+
+        // Perform the queries and build clusters through callback
+        Kokkos::Profiling::pushRegion("ArborX::DBSCAN::clusters::query");
+        bvh.query(exec_space, predicates,
+                  Details::FDBSCANCallback<UnionFind, CorePoints>{
+                      labels, CorePoints{num_neigh, core_min_size}});
+        Kokkos::Profiling::popRegion();
+      }
+
+    } else if (parameters._tree == "brute")
+
+      {
+      // Build the tree
+      Kokkos::Profiling::pushRegion("ArborX::DBSCAN::tree_construction");
+//      BasicBoundingVolumeHierarchy<MemorySpace, Box> bvh(exec_space, primitives);
+      ArborX::BruteForce<MemorySpace> brute{exec_space, primitives};
       Kokkos::Profiling::popRegion();
-    }
+
+      Kokkos::Profiling::pushRegion("ArborX::DBSCAN::clusters");
+      auto const predicates =
+          Details::PrimitivesWithRadius<Primitives>{primitives, eps};
+      if (is_special_case)
+      {
+        // Perform the queries and build clusters through callback
+        using CorePoints = Details::CCSCorePoints;
+        CorePoints core_points;
+        Kokkos::Profiling::pushRegion("ArborX::DBSCAN::clusters::query");
+//        bvh.query(
+//            exec_space, predicates,
+//            Details::FDBSCANCallback<UnionFind, CorePoints>{labels, core_points});
+        brute.query(
+             exec_space, predicates,
+             Details::FDBSCANCallback<UnionFind, CorePoints>{labels, core_points});
+        Kokkos::Profiling::popRegion();
+      }
+      else
+      {
+        // Determine core points
+        Kokkos::Profiling::pushRegion("ArborX::DBSCAN::clusters::num_neigh");
+//        Kokkos::resize(num_neigh, n);
+//        bvh.query(exec_space, predicates,
+//                  Details::CountUpToN<MemorySpace>{num_neigh, core_min_size});
+        brute.query(exec_space, predicates,
+                   Details::CountUpToN<MemorySpace>{num_neigh, core_min_size});
+        Kokkos::Profiling::popRegion();
+
+        using CorePoints = Details::DBSCANCorePoints<MemorySpace>;
+
+        // Perform the queries and build clusters through callback
+        Kokkos::Profiling::pushRegion("ArborX::DBSCAN::clusters::query");
+//        bvh.query(exec_space, predicates,
+//                  Details::FDBSCANCallback<UnionFind, CorePoints>{
+//                      labels, CorePoints{num_neigh, core_min_size}});
+        brute.query(exec_space, predicates,
+                   Details::FDBSCANCallback<UnionFind, CorePoints>{
+                       labels, CorePoints{num_neigh, core_min_size}});
+        Kokkos::Profiling::popRegion();
+      }
+
+    } // bvh or brute
+
   }
   else if (parameters._implementation ==
            DBSCAN::Implementation::FDBSCAN_DenseBox)
