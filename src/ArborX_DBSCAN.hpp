@@ -321,9 +321,8 @@ dbscan(ExecutionSpace const &exec_space, Primitives const &primitives,
     } else if (parameters._tree == "brute")
 
       {
-      // Build the tree
+      // Initialize brute force
       Kokkos::Profiling::pushRegion("ArborX::DBSCAN::tree_construction");
-//      BasicBoundingVolumeHierarchy<MemorySpace, Box> bvh(exec_space, primitives);
       ArborX::BruteForce<MemorySpace> brute{exec_space, primitives};
       Kokkos::Profiling::popRegion();
 
@@ -336,9 +335,6 @@ dbscan(ExecutionSpace const &exec_space, Primitives const &primitives,
         using CorePoints = Details::CCSCorePoints;
         CorePoints core_points;
         Kokkos::Profiling::pushRegion("ArborX::DBSCAN::clusters::query");
-//        bvh.query(
-//            exec_space, predicates,
-//            Details::FDBSCANCallback<UnionFind, CorePoints>{labels, core_points});
         brute.query(
              exec_space, predicates,
              Details::FDBSCANCallback<UnionFind, CorePoints>{labels, core_points});
@@ -348,9 +344,7 @@ dbscan(ExecutionSpace const &exec_space, Primitives const &primitives,
       {
         // Determine core points
         Kokkos::Profiling::pushRegion("ArborX::DBSCAN::clusters::num_neigh");
-//        Kokkos::resize(num_neigh, n);
-//        bvh.query(exec_space, predicates,
-//                  Details::CountUpToN<MemorySpace>{num_neigh, core_min_size});
+        Kokkos::resize(num_neigh, n);
         brute.query(exec_space, predicates,
                    Details::CountUpToN<MemorySpace>{num_neigh, core_min_size});
         Kokkos::Profiling::popRegion();
@@ -359,9 +353,6 @@ dbscan(ExecutionSpace const &exec_space, Primitives const &primitives,
 
         // Perform the queries and build clusters through callback
         Kokkos::Profiling::pushRegion("ArborX::DBSCAN::clusters::query");
-//        bvh.query(exec_space, predicates,
-//                  Details::FDBSCANCallback<UnionFind, CorePoints>{
-//                      labels, CorePoints{num_neigh, core_min_size}});
         brute.query(exec_space, predicates,
                    Details::FDBSCANCallback<UnionFind, CorePoints>{
                        labels, CorePoints{num_neigh, core_min_size}});
