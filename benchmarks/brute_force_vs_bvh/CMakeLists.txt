@@ -19,3 +19,7 @@ add_executable(ArborX_Benchmark_BruteForceVsBVH.exe
 )
 target_link_libraries(ArborX_Benchmark_BruteForceVsBVH.exe ArborX::ArborX Boost::program_options)
 add_test(NAME ArborX_Benchmark_BruteForceVsBVH COMMAND ./ArborX_Benchmark_BruteForceVsBVH.exe)
+
+configure_file(${CMAKE_CURRENT_SOURCE_DIR}/random_cube_data.py ${CMAKE_CURRENT_BINARY_DIR}/random_cube_data.py COPYONLY)
+configure_file(${CMAKE_CURRENT_SOURCE_DIR}/rungrid.sh ${CMAKE_CURRENT_BINARY_DIR}/rungrid.sh COPYONLY)
+configure_file(${CMAKE_CURRENT_SOURCE_DIR}/plotgridauto.py ${CMAKE_CURRENT_BINARY_DIR}/plotgridauto.py COPYONLY)
