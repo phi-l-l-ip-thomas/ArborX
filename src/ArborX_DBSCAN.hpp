@@ -230,25 +230,27 @@ struct Parameters
 
 } // namespace DBSCAN
 
-/* PT: Define visitors for {brute,bvh}-agnostic code here:
-
+// PT: Define visitors for {brute,bvh}-agnostic code here:
+  template<typename MemorySpace>
+  using brutebvh = std::variant<std::monostate , ArborX::BruteForce<MemorySpace> , BasicBoundingVolumeHierarchy<MemorySpace, Box>>;
 // subroutine or struct (here, or in dbscan?) to define brutebvh as variant?
 
-template <list of typenames same as dbscan below??? >
-  brutebvh<typename MemorySpace, typename Box> select_tree(const std::string tree)
+template <typename ExecutionSpace, typename Primitives >
+  brutebvh<typename ExecutionSpace::memory_space> select_tree(const std::string tree, ExecutionSpace const &exec_space, Primitives const &primitives)
   {
 
    using Access = AccessTraits<Primitives, PrimitivesTag>;
    using MemorySpace = typename Access::memory_space;
-   using Box = ExperimentalHyperGeometry::Box<dim>;
+   static_assert(std::is_same_v<MemorySpace, typename ExecutionSpace::memory_space >);
+//   using Box = ExperimentalHyperGeometry::Box<dim>;
 
-        if (tree == "brute") return ArborX::BruteForce<MemorySpace>;
-        else if (tree == "bvh") return BasicBoundingVolumeHierarchy<MemorySpace, Box>;
+        if (tree == "bvh") return ArborX::BasicBoundingVolumeHierarchy<MemorySpace> bvh(exec_space, primitives);
+        else if (tree == "brute") return ArborX::BruteForce<MemorySpace> brute{exec_space, primitives};
         else return std::monostate;
 
 	// Monostate should return error since this indicates an invalid choice
   }
-
+/*
 // Visitor for query (special case minpts = 2):
 
 template < typename brutetype, typename bvhtype >
@@ -291,8 +293,8 @@ struct minptsn_query_visitor
 }
 
 // Perhaps 3 visitors above can be consolidated to a single struct via overloading?
-
 */
+
 
 template <typename ExecutionSpace, typename Primitives>
 Kokkos::View<int *,
@@ -346,7 +348,7 @@ dbscan(ExecutionSpace const &exec_space, Primitives const &primitives,
 // PT: std::variant declaration for the {brute,bvh}-agnostic code
 // Should brutebvh be initialized in this manner?
 // Note to self: wrap initialization with calls to profiling routines
-    using brutebvh = std::variant<std::monostate , ArborX::BruteForce<MemorySpace> , BasicBoundingVolumeHierarchy<MemorySpace, Box>>;
+//    using brutebvh = std::variant<std::monostate , ArborX::BruteForce<MemorySpace> , BasicBoundingVolumeHierarchy<MemorySpace, Box>>;
 
 //  PT: Later: use 'brutebvh' variant to do following via std::visit(visitor, brutebvh) for visitor:
 //  - query (special case minpts = 2)
