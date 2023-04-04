@@ -22,6 +22,7 @@
 #include <ArborX_LinearBVH.hpp>
 #include <ArborX_BruteForce.hpp>
 #include <ArborX_Sphere.hpp>
+#include <variant>
 
 namespace ArborX
 {
@@ -226,7 +227,72 @@ struct Parameters
     return *this;
   }
 };
+
 } // namespace DBSCAN
+
+/* PT: Define visitors for {brute,bvh}-agnostic code here:
+
+// subroutine or struct (here, or in dbscan?) to define brutebvh as variant?
+
+template <list of typenames same as dbscan below??? >
+  brutebvh<typename MemorySpace, typename Box> select_tree(const std::string tree)
+  {
+
+   using Access = AccessTraits<Primitives, PrimitivesTag>;
+   using MemorySpace = typename Access::memory_space;
+   using Box = ExperimentalHyperGeometry::Box<dim>;
+
+        if (tree == "brute") return ArborX::BruteForce<MemorySpace>;
+        else if (tree == "bvh") return BasicBoundingVolumeHierarchy<MemorySpace, Box>;
+        else return std::monostate;
+
+	// Monostate should return error since this indicates an invalid choice
+  }
+
+// Visitor for query (special case minpts = 2):
+
+template < typename brutetype, typename bvhtype >
+struct minpts2_query_visitor
+{
+  using ... ???
+
+  void operator()(brutetype brute){
+     // query here (how to pass parameters to query ?)
+     brute.query(
+                 exec_space, predicates,
+                 Details::FDBSCANCallback<UnionFind, CorePoints>{labels, core_points});
+
+  }
+
+  void operator()(bvhtype bvh){
+     // query here (how to pass parameters to query ?)
+     bvh.query(
+               exec_space, predicates,
+               Details::FDBSCANCallback<UnionFind, CorePoints>{labels, core_points});
+
+  }
+
+}
+
+// Visitor for CountUptoN (minpts > 2):
+
+template < list of typenames ??? >
+struct minptsn_count_visitor
+{
+
+}
+
+// Visitor for query (minpts > 2):
+
+template < list of typenames ??? >
+struct minptsn_query_visitor
+{
+
+}
+
+// Perhaps 3 visitors above can be consolidated to a single struct via overloading?
+
+*/
 
 template <typename ExecutionSpace, typename Primitives>
 Kokkos::View<int *,
@@ -277,11 +343,22 @@ dbscan(ExecutionSpace const &exec_space, Primitives const &primitives,
   if (parameters._implementation == DBSCAN::Implementation::FDBSCAN)
   {
 
-    if (parameters._tree == "bvh")
+// PT: std::variant declaration for the {brute,bvh}-agnostic code
+// Should brutebvh be initialized in this manner?
+// Note to self: wrap initialization with calls to profiling routines
+    using brutebvh = std::variant<std::monostate , ArborX::BruteForce<MemorySpace> , BasicBoundingVolumeHierarchy<MemorySpace, Box>>;
+
+//  PT: Later: use 'brutebvh' variant to do following via std::visit(visitor, brutebvh) for visitor:
+//  - query (special case minpts = 2)
+//  - count up to N      (minpts > 2)
+//  - query              (minpts > 2)
+
+    if (parameters._tree == "bvh") // PT: conditional to be removed once variant is implemented
     {
 
       // Build the tree
       Kokkos::Profiling::pushRegion("ArborX::DBSCAN::tree_construction");
+      // PT: replace next call with variant initialization
       BasicBoundingVolumeHierarchy<MemorySpace, Box> bvh(exec_space, primitives);
       Kokkos::Profiling::popRegion();
 
@@ -294,6 +371,7 @@ dbscan(ExecutionSpace const &exec_space, Primitives const &primitives,
         using CorePoints = Details::CCSCorePoints;
         CorePoints core_points;
         Kokkos::Profiling::pushRegion("ArborX::DBSCAN::clusters::query");
+	// PT: replace query with call to visitor
         bvh.query(
             exec_space, predicates,
             Details::FDBSCANCallback<UnionFind, CorePoints>{labels, core_points});
@@ -304,6 +382,7 @@ dbscan(ExecutionSpace const &exec_space, Primitives const &primitives,
         // Determine core points
         Kokkos::Profiling::pushRegion("ArborX::DBSCAN::clusters::num_neigh");
         Kokkos::resize(num_neigh, n);
+	// PT: replace query with call to visitor
         bvh.query(exec_space, predicates,
                   Details::CountUpToN<MemorySpace>{num_neigh, core_min_size});
         Kokkos::Profiling::popRegion();
@@ -312,13 +391,14 @@ dbscan(ExecutionSpace const &exec_space, Primitives const &primitives,
 
         // Perform the queries and build clusters through callback
         Kokkos::Profiling::pushRegion("ArborX::DBSCAN::clusters::query");
+	// PT: replace query with call to visitor
         bvh.query(exec_space, predicates,
                   Details::FDBSCANCallback<UnionFind, CorePoints>{
                       labels, CorePoints{num_neigh, core_min_size}});
         Kokkos::Profiling::popRegion();
       }
 
-    } else if (parameters._tree == "brute")
+    } else if (parameters._tree == "brute") // PT: brute version removed once variant is implemented
 
       {
       // Initialize brute force
