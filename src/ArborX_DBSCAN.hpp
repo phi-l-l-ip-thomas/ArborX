@@ -251,7 +251,7 @@ brutebvh<typename ExecutionSpace::memory_space> select_tree(const std::string tr
 
 // Visitor for query (special case minpts = 2):
 template <typename ExecutionSpace, typename Predicates, typename Callback>
-struct minpts2_query_visitor
+struct query_visitor
 {
 
   ExecutionSpace const &exec_space;
@@ -265,27 +265,6 @@ struct minpts2_query_visitor
   void operator()(std::monostate tree){};
 
 };
-/*
-
-// Visitor for CountUptoN (minpts > 2):
-
-template < list of typenames ??? >
-struct minptsn_count_visitor
-{
-
-}
-
-// Visitor for query (minpts > 2):
-
-template < list of typenames ??? >
-struct minptsn_query_visitor
-{
-
-}
-
-// Perhaps 3 visitors above can be consolidated to a single struct via overloading?
-*/
-
 
 template <typename ExecutionSpace, typename Primitives>
 Kokkos::View<int *,
@@ -336,115 +315,56 @@ dbscan(ExecutionSpace const &exec_space, Primitives const &primitives,
   if (parameters._implementation == DBSCAN::Implementation::FDBSCAN)
   {
 
-// PT: std::variant declaration for the {brute,bvh}-agnostic code
-// Should brutebvh be initialized in this manner?
-// Note to self: wrap initialization with calls to profiling routines
-//    using brutebvh = std::variant<std::monostate , ArborX::BruteForce<MemorySpace> , BasicBoundingVolumeHierarchy<MemorySpace, Box>>;
+//  Construct the brute-force or bvh object
+    Kokkos::Profiling::pushRegion("ArborX::DBSCAN::tree_construction");
     brutebvh<MemorySpace> bru_or_bvh = select_tree(parameters._tree, exec_space, primitives);
+    Kokkos::Profiling::popRegion();
 
-//  PT: Later: use 'brutebvh' variant to do following via std::visit(visitor, brutebvh) for visitor:
-//  - query (special case minpts = 2)
-//  - count up to N      (minpts > 2)
-//  - query              (minpts > 2)
-
-    if (parameters._tree == "bvh") // PT: conditional to be removed once variant is implemented
+    Kokkos::Profiling::pushRegion("ArborX::DBSCAN::clusters");
+    auto const predicates =
+        Details::PrimitivesWithRadius<Primitives>{primitives, eps};
+    if (is_special_case)
     {
+      // Perform the queries and build clusters through callback
+      using CorePoints = Details::CCSCorePoints;
+      CorePoints core_points;
+      Kokkos::Profiling::pushRegion("ArborX::DBSCAN::clusters::query");
 
-      // Build the tree
-      Kokkos::Profiling::pushRegion("ArborX::DBSCAN::tree_construction");
-      // PT: replace next call with variant initialization
-      BasicBoundingVolumeHierarchy<MemorySpace, Box> bvh(exec_space, primitives);
+      // Query via call to visitor
+      std::visit( query_visitor<ExecutionSpace, Details::PrimitivesWithRadius<Primitives>, 
+                  Details::FDBSCANCallback<UnionFind, CorePoints>>{exec_space, predicates, 
+		  Details::FDBSCANCallback<UnionFind, CorePoints>{labels, core_points}},
+		  bru_or_bvh );
+
+      Kokkos::Profiling::popRegion();
+    }
+    else
+    {
+      // Determine core points
+      Kokkos::Profiling::pushRegion("ArborX::DBSCAN::clusters::num_neigh");
+      Kokkos::resize(num_neigh, n);
+
+      // Query via call to visitor
+      std::visit( query_visitor<ExecutionSpace, Details::PrimitivesWithRadius<Primitives>,
+                  Details::CountUpToN<MemorySpace>>{exec_space, predicates,
+                  Details::CountUpToN<MemorySpace>{num_neigh, core_min_size}},
+                  bru_or_bvh );
+
       Kokkos::Profiling::popRegion();
 
-      Kokkos::Profiling::pushRegion("ArborX::DBSCAN::clusters");
-      auto const predicates =
-          Details::PrimitivesWithRadius<Primitives>{primitives, eps};
-      if (is_special_case)
-      {
-        // Perform the queries and build clusters through callback
-        using CorePoints = Details::CCSCorePoints;
-        CorePoints core_points;
-        Kokkos::Profiling::pushRegion("ArborX::DBSCAN::clusters::query");
+      using CorePoints = Details::DBSCANCorePoints<MemorySpace>;
 
-	// PT: replace query with call to visitor
-	Details::FDBSCANCallback<UnionFind, CorePoints> clbk{labels, core_points};
-	minpts2_query_visitor<ExecutionSpace, Details::PrimitivesWithRadius<Primitives>, Details::FDBSCANCallback<UnionFind, CorePoints>> mp2vis{exec_space, predicates, clbk};
-	std::visit( mp2vis, bru_or_bvh );
+      // Perform the queries and build clusters through callback
+      Kokkos::Profiling::pushRegion("ArborX::DBSCAN::clusters::query");
 
-//        bvh.query(
-//            exec_space, predicates,
-//            Details::FDBSCANCallback<UnionFind, CorePoints>{labels, core_points});
-        Kokkos::Profiling::popRegion();
-      }
-      else
-      {
-        // Determine core points
-        Kokkos::Profiling::pushRegion("ArborX::DBSCAN::clusters::num_neigh");
-        Kokkos::resize(num_neigh, n);
-	// PT: replace query with call to visitor
-        bvh.query(exec_space, predicates,
-                  Details::CountUpToN<MemorySpace>{num_neigh, core_min_size});
-        Kokkos::Profiling::popRegion();
+      // Query via call to visitor
+      std::visit( query_visitor<ExecutionSpace, Details::PrimitivesWithRadius<Primitives>,
+                  Details::FDBSCANCallback<UnionFind, CorePoints>>{exec_space, predicates,
+                  Details::FDBSCANCallback<UnionFind, CorePoints>{labels, CorePoints{num_neigh, core_min_size}}},
+                  bru_or_bvh );
 
-        using CorePoints = Details::DBSCANCorePoints<MemorySpace>;
-
-        // Perform the queries and build clusters through callback
-        Kokkos::Profiling::pushRegion("ArborX::DBSCAN::clusters::query");
-	// PT: replace query with call to visitor
-        bvh.query(exec_space, predicates,
-                  Details::FDBSCANCallback<UnionFind, CorePoints>{
-                      labels, CorePoints{num_neigh, core_min_size}});
-        Kokkos::Profiling::popRegion();
-      }
-
-    } else if (parameters._tree == "brute") // PT: brute version removed once variant is implemented
-
-      {
-      // Initialize brute force
-      Kokkos::Profiling::pushRegion("ArborX::DBSCAN::tree_construction");
-      ArborX::BruteForce<MemorySpace> brute{exec_space, primitives};
       Kokkos::Profiling::popRegion();
-
-      Kokkos::Profiling::pushRegion("ArborX::DBSCAN::clusters");
-      auto const predicates =
-          Details::PrimitivesWithRadius<Primitives>{primitives, eps};
-      if (is_special_case)
-      {
-        // Perform the queries and build clusters through callback
-        using CorePoints = Details::CCSCorePoints;
-        CorePoints core_points;
-        Kokkos::Profiling::pushRegion("ArborX::DBSCAN::clusters::query");
-
-        // PT: replace query with call to visitor
-	Details::FDBSCANCallback<UnionFind, CorePoints> clbk{labels, core_points};
-	minpts2_query_visitor<ExecutionSpace, Details::PrimitivesWithRadius<Primitives>, Details::FDBSCANCallback<UnionFind, CorePoints>> mp2vis{exec_space, predicates, clbk};
-        std::visit( mp2vis, bru_or_bvh );
-
-//        brute.query(
-//             exec_space, predicates,
-//             Details::FDBSCANCallback<UnionFind, CorePoints>{labels, core_points});
-        Kokkos::Profiling::popRegion();
-      }
-      else
-      {
-        // Determine core points
-        Kokkos::Profiling::pushRegion("ArborX::DBSCAN::clusters::num_neigh");
-        Kokkos::resize(num_neigh, n);
-        brute.query(exec_space, predicates,
-                   Details::CountUpToN<MemorySpace>{num_neigh, core_min_size});
-        Kokkos::Profiling::popRegion();
-
-        using CorePoints = Details::DBSCANCorePoints<MemorySpace>;
-
-        // Perform the queries and build clusters through callback
-        Kokkos::Profiling::pushRegion("ArborX::DBSCAN::clusters::query");
-        brute.query(exec_space, predicates,
-                   Details::FDBSCANCallback<UnionFind, CorePoints>{
-                       labels, CorePoints{num_neigh, core_min_size}});
-        Kokkos::Profiling::popRegion();
-      }
-
-    } // bvh or brute
+    }
 
   }
   else if (parameters._implementation ==
