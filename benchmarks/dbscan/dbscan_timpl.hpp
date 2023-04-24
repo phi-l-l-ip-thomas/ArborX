@@ -197,7 +197,8 @@ bool ArborXBenchmark::run(ArborXBenchmark::Parameters const &params)
 
     ArborX::DBSCAN::Parameters dbscan_params;
     dbscan_params.setVerbosity(params.verbose)
-        .setImplementation(implementation);
+        .setImplementation(implementation)
+        .setTree(params.tree);
 
     Kokkos::Profiling::pushRegion("ArborX::DBSCAN::total");
 

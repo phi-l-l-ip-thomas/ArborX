@@ -75,6 +75,7 @@ int main(int argc, char *argv[])
       ( "eps", bpo::value<float>(&params.eps), "DBSCAN eps" )
       ( "filename", bpo::value<std::string>(&params.filename), "filename containing data" )
       ( "impl", bpo::value<std::string>(&params.implementation)->default_value("fdbscan"), "implementation (fdbscan | fdbscan-densebox)")
+      ( "tree", bpo::value<std::string>(&params.tree)->default_value("bvh"), "tree (bvh | brute)")
       ( "labels", bpo::value<std::string>(&params.filename_labels)->default_value(""), "clutering results output" )
       ( "max-num-points", bpo::value<int>(&params.max_num_points)->default_value(-1), "max number of points to read in")
       ( "n", bpo::value<int>(&params.n)->default_value(10), "number of points to generate" )
@@ -117,6 +118,7 @@ int main(int argc, char *argv[])
     printf("eps               : %f\n", params.eps);
     printf("cluster min size  : %d\n", params.cluster_min_size);
     printf("implementation    : %s\n", ss.str().c_str());
+    printf("tree              : %s\n", params.tree.c_str());
     printf("verify            : %s\n", (params.verify ? "true" : "false"));
   }
   printf("minpts            : %d\n", params.core_min_size);

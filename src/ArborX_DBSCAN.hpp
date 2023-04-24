@@ -21,7 +21,9 @@
 #include <ArborX_HyperBox.hpp>
 #include <ArborX_HyperSphere.hpp>
 #include <ArborX_LinearBVH.hpp>
+#include <ArborX_BruteForce.hpp>
 #include <ArborX_Sphere.hpp>
+#include <variant>
 
 namespace ArborX
 {
@@ -225,6 +227,8 @@ struct Parameters
   bool _verbose = false;
   // Algorithm implementation (FDBSCAN or FDBSCAN-DenseBox)
   Implementation _implementation = Implementation::FDBSCAN_DenseBox;
+  // Tree type (construct-and-traverse bvh or use brute force)
+  std::string _tree;
 
   Parameters &setVerbosity(bool verbose)
   {
@@ -236,8 +240,49 @@ struct Parameters
     _implementation = impl;
     return *this;
   }
+  Parameters &setTree(std::string tree)
+  {
+    _tree = tree;
+    return *this;
+  }
 };
 } // namespace DBSCAN
+
+// Return a variant which is either a brute or bvh object
+template<typename MemorySpace>
+using brutebvh = std::variant<std::monostate , ArborX::BruteForce<MemorySpace> , ArborX::BVH<MemorySpace>>;
+
+template <typename ExecutionSpace, typename Primitives >
+brutebvh<typename ExecutionSpace::memory_space> select_tree(const std::string tree, ExecutionSpace const &exec_space, Primitives const &primitives)
+{
+
+   using Access = AccessTraits<Primitives, PrimitivesTag>;
+   using MemorySpace = typename Access::memory_space;
+   static_assert(std::is_same_v<MemorySpace, typename ExecutionSpace::memory_space >);
+
+   if (tree == "bvh") return ArborX::BVH<MemorySpace>(exec_space, primitives);
+   else if (tree == "brute") return ArborX::BruteForce<MemorySpace>(exec_space, primitives);
+   else return std::monostate();
+
+   // Monostate should return error since this indicates an invalid choice
+}
+
+// Visitor for query
+template <typename ExecutionSpace, typename Predicates, typename Callback>
+struct query_visitor
+{
+
+  ExecutionSpace const &exec_space;
+  Predicates predicates;
+  Callback callback;
+
+  template<typename treetype>
+  void operator()(treetype tree){
+     tree.query(exec_space, predicates, callback);
+  }
+  void operator()(std::monostate tree){};
+
+};
 
 template <typename ExecutionSpace, typename Primitives>
 Kokkos::View<int *,
@@ -289,6 +334,9 @@ dbscan(ExecutionSpace const &exec_space, Primitives const &primitives,
   {
     // Build the tree
     Kokkos::Profiling::pushRegion("ArborX::DBSCAN::tree_construction");
+//  PT: Variant decl.
+//    brutebvh<MemorySpace> bru_or_bvh = select_tree(parameters._tree, exec_space, primitives);
+//
     BasicBoundingVolumeHierarchy<MemorySpace, Box> bvh(exec_space, primitives);
     Kokkos::Profiling::popRegion();
 
@@ -320,6 +368,10 @@ dbscan(ExecutionSpace const &exec_space, Primitives const &primitives,
       // Determine core points
       Kokkos::Profiling::pushRegion("ArborX::DBSCAN::clusters::num_neigh");
       Kokkos::resize(Kokkos::view_alloc(exec_space), num_neigh, n);
+//      std::visit( query_visitor<ExecutionSpace, Details::PrimitivesWithRadius<Primitives>,
+//                  Details::CountUpToN<MemorySpace>>{exec_space, predicates,
+//                  Details::CountUpToN<MemorySpace>{num_neigh, core_min_size}},
+//                  bru_or_bvh );
       bvh.query(exec_space, predicates,
                 Details::CountUpToN<MemorySpace>{num_neigh, core_min_size});
       Kokkos::Profiling::popRegion();

@@ -24,6 +24,7 @@ struct Parameters
   std::string filename;
   std::string filename_labels;
   std::string implementation;
+  std::string tree;
   int max_num_points;
   int n;
   int num_samples;
