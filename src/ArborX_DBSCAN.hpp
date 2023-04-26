@@ -249,19 +249,25 @@ struct Parameters
 } // namespace DBSCAN
 
 // Return a variant which is either a brute or bvh object
-template<typename MemorySpace>
-using brutebvh = std::variant<std::monostate , ArborX::BruteForce<MemorySpace> , ArborX::BVH<MemorySpace>>;
+template<typename MemorySpace, typename Box>
+using brutebvh = std::variant<std::monostate , ArborX::BruteForce<MemorySpace, Box> , BasicBoundingVolumeHierarchy<MemorySpace, Box>>;
 
 template <typename ExecutionSpace, typename Primitives >
-brutebvh<typename ExecutionSpace::memory_space> select_tree(const std::string tree, ExecutionSpace const &exec_space, Primitives const &primitives)
+brutebvh<typename ExecutionSpace::memory_space, 
+	 ExperimentalHyperGeometry::Box<GeometryTraits::dimension_v< typename Details::AccessTraitsHelper< AccessTraits<Primitives, PrimitivesTag>>::type> >> 
+         select_tree(const std::string tree, ExecutionSpace const &exec_space, Primitives const &primitives)
 {
 
    using Access = AccessTraits<Primitives, PrimitivesTag>;
    using MemorySpace = typename Access::memory_space;
    static_assert(std::is_same_v<MemorySpace, typename ExecutionSpace::memory_space >);
 
-   if (tree == "bvh") return ArborX::BVH<MemorySpace>(exec_space, primitives);
-   else if (tree == "brute") return ArborX::BruteForce<MemorySpace>(exec_space, primitives);
+   constexpr int dim = GeometryTraits::dimension_v<
+      typename Details::AccessTraitsHelper<Access>::type>;
+   using Box = ExperimentalHyperGeometry::Box<dim>;
+
+   if (tree == "bvh") return BasicBoundingVolumeHierarchy<MemorySpace, Box>(exec_space, primitives);
+   else if (tree == "brute") return ArborX::BruteForce<MemorySpace, Box>(exec_space, primitives);
    else return std::monostate();
 
    // Monostate should return error since this indicates an invalid choice
@@ -283,6 +289,8 @@ struct query_visitor
   void operator()(std::monostate tree){};
 
 };
+
+// Visitor for HalfTraversal goes here
 
 template <typename ExecutionSpace, typename Primitives>
 Kokkos::View<int *,
@@ -335,7 +343,7 @@ dbscan(ExecutionSpace const &exec_space, Primitives const &primitives,
     // Build the tree
     Kokkos::Profiling::pushRegion("ArborX::DBSCAN::tree_construction");
 //  PT: Variant decl.
-//    brutebvh<MemorySpace> bru_or_bvh = select_tree(parameters._tree, exec_space, primitives);
+    brutebvh<MemorySpace, Box> bru_or_bvh = select_tree(parameters._tree, exec_space, primitives);
 //
     BasicBoundingVolumeHierarchy<MemorySpace, Box> bvh(exec_space, primitives);
     Kokkos::Profiling::popRegion();
@@ -368,12 +376,12 @@ dbscan(ExecutionSpace const &exec_space, Primitives const &primitives,
       // Determine core points
       Kokkos::Profiling::pushRegion("ArborX::DBSCAN::clusters::num_neigh");
       Kokkos::resize(Kokkos::view_alloc(exec_space), num_neigh, n);
-//      std::visit( query_visitor<ExecutionSpace, Details::PrimitivesWithRadius<Primitives>,
-//                  Details::CountUpToN<MemorySpace>>{exec_space, predicates,
-//                  Details::CountUpToN<MemorySpace>{num_neigh, core_min_size}},
-//                  bru_or_bvh );
-      bvh.query(exec_space, predicates,
-                Details::CountUpToN<MemorySpace>{num_neigh, core_min_size});
+      std::visit( query_visitor<ExecutionSpace, Details::PrimitivesWithRadius<Primitives>,
+                  Details::CountUpToN<MemorySpace>>{exec_space, predicates,
+                  Details::CountUpToN<MemorySpace>{num_neigh, core_min_size}},
+                  bru_or_bvh );
+//      bvh.query(exec_space, predicates,
+//                Details::CountUpToN<MemorySpace>{num_neigh, core_min_size});
       Kokkos::Profiling::popRegion();
 
       using CorePoints = Details::DBSCANCorePoints<MemorySpace>;
