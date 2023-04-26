@@ -222,23 +222,23 @@ bool ArborXBenchmark::run(ArborXBenchmark::Parameters const &params)
       bool const is_special_case = (params.core_min_size == 2);
 
       if (implementation == ArborX::DBSCAN::Implementation::FDBSCAN_DenseBox)
-        printf("-- dense cells      : %10.3f\n",
+        printf("-- dense cells      : %13.6f\n",
                ArborX_Benchmark::get_time("ArborX::DBSCAN::dense_cells"));
-      printf("-- construction     : %10.3f\n",
+      printf("-- construction     : %13.6f\n",
              ArborX_Benchmark::get_time("ArborX::DBSCAN::tree_construction"));
-      printf("-- query+cluster    : %10.3f\n",
+      printf("-- query+cluster    : %13.6f\n",
              ArborX_Benchmark::get_time("ArborX::DBSCAN::clusters"));
       if (!is_special_case)
       {
         printf(
-            "---- neigh          : %10.3f\n",
+            "---- neigh          : %13.6f\n",
             ArborX_Benchmark::get_time("ArborX::DBSCAN::clusters::num_neigh"));
-        printf("---- query          : %10.3f\n",
+        printf("---- query          : %13.6f\n",
                ArborX_Benchmark::get_time("ArborX::DBSCAN::clusters::query"));
       }
-      printf("-- postprocess      : %10.3f\n",
+      printf("-- postprocess      : %13.6f\n",
              ArborX_Benchmark::get_time("ArborX::DBSCAN::postprocess"));
-      printf("total time          : %10.3f\n",
+      printf("total time          : %13.6f\n",
              ArborX_Benchmark::get_time("ArborX::DBSCAN::total"));
     }
 
