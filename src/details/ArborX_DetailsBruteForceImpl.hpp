@@ -50,7 +50,7 @@ struct BruteForceImpl
 
   template <class ExecutionSpace, class Primitives, class Predicates,
             class Callback>
-  static void query(ExecutionSpace const &space, Primitives const &primitives,
+  static void query_fillshared(ExecutionSpace const &space, Primitives const &primitives,
                     Predicates const &predicates, Callback const &callback)
   {
     using TeamPolicy = Kokkos::TeamPolicy<ExecutionSpace>;
@@ -141,6 +141,129 @@ struct BruteForceImpl
               });
         });
   }
+
+  template <class ExecutionSpace, class Primitives, class Predicates,
+            class Callback>
+  static void query(ExecutionSpace const &space, Primitives const &primitives,
+                    Predicates const &predicates, Callback const &callback)
+  {
+    using TeamPolicy = Kokkos::TeamPolicy<ExecutionSpace>;
+    using AccessPrimitives = AccessTraits<Primitives, PrimitivesTag>;
+    using AccessPredicates = AccessTraits<Predicates, PredicatesTag>;
+    using PredicateType = typename AccessTraitsHelper<AccessPredicates>::type;
+    using PrimitiveType = typename AccessTraitsHelper<AccessPrimitives>::type;
+
+    int const n_primitives = AccessPrimitives::size(primitives);
+    int const n_predicates = AccessPredicates::size(predicates);
+    int max_scratch_size = TeamPolicy::scratch_size_max(0);
+
+    // Hard-code predicates-per-team; primitives-per-team; this choice
+    // is tuned for case of 3 spatial dimensions on NVIDIA A100 GPUs
+    int const predicates_per_team = 128;
+    int const primitives_per_team = 320;
+
+    int const n_primitive_tiles =
+        std::ceil((float)n_primitives / primitives_per_team);
+    int const n_predicate_tiles =
+        std::ceil((float)n_predicates / predicates_per_team);
+    int const n_teams = n_predicate_tiles;
+
+    // Use scratch space for primitives only
+    using ScratchPrimitiveType =
+        Kokkos::View<PrimitiveType *,
+                     typename ExecutionSpace::scratch_memory_space,
+                     Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
+    int scratch_size = ScratchPrimitiveType::shmem_size(primitives_per_team);
+
+    Kokkos::parallel_for(
+        "ArborX::BruteForce::query::spatial::"
+        "check_all_predicates_against_all_primitives_tiled",
+        TeamPolicy(space, n_teams, 128 /*Kokkos::AUTO*/, 1)
+            .set_scratch_size(0, Kokkos::PerTeam(scratch_size)),
+        KOKKOS_LAMBDA(typename TeamPolicy::member_type const &teamMember) {
+
+          // Select the tiles of predicates checked by each team
+          int predicate_start = predicates_per_team * teamMember.league_rank();
+          int predicates_in_this_team = KokkosExt::min(
+              predicates_per_team, n_predicates - predicate_start);
+
+          // Load predicate from global, primitives from scratch
+          ScratchPrimitiveType scratch_primitives(teamMember.team_scratch(0),
+                                                  primitives_per_team);
+
+          Kokkos::parallel_for(
+              Kokkos::TeamThreadRange(teamMember, predicates_in_this_team),
+              [&](int q) {
+
+                  // Predicate for this thread
+                  auto const &predicate = AccessPredicates::get(predicates, predicate_start + q);
+
+                  // Loop over primitive tiles
+                  for (int i=0; i<n_primitives; i+=primitives_per_team){
+
+                      int primitive_start = i;
+                      int primitives_in_this_team = KokkosExt::min(
+                      primitives_per_team, n_primitives - primitive_start);
+
+                      // Load a new tile of primitives into scratch
+                      Kokkos::parallel_for(
+                          Kokkos::TeamVectorRange(teamMember, primitives_in_this_team),
+                          [&](const int j) {
+                            scratch_primitives(j) =
+                                AccessPrimitives::get(primitives, primitive_start + j);
+                         });
+                      teamMember.team_barrier();
+
+                      Kokkos::parallel_for(
+                          Kokkos::ThreadVectorRange(teamMember,
+                                                  primitives_in_this_team),
+                          [&](const int j) {
+                            auto const &primitive = scratch_primitives(j);
+                            if (predicate(primitive))
+                            {
+                              callback(predicate, j + primitive_start);
+                            }
+                          });
+                      teamMember.team_barrier();
+                  }
+              });
+        });
+  }
+
+  template <class ExecutionSpace, class Primitives, class Predicates,
+            class Callback>
+  static void query_noshared(ExecutionSpace const &space, Primitives const &primitives,
+                    Predicates const &predicates, Callback const &callback)
+  {
+    using AccessPrimitives = AccessTraits<Primitives, PrimitivesTag>;
+    using AccessPredicates = AccessTraits<Predicates, PredicatesTag>;
+    using PredicateType = typename AccessTraitsHelper<AccessPredicates>::type;
+    using PrimitiveType = typename AccessTraitsHelper<AccessPrimitives>::type;
+
+    int const n_primitives = AccessPrimitives::size(primitives);
+    int const n_predicates = AccessPredicates::size(predicates);
+
+    // This version does not use shared memory 
+    // Each predicate checked against all primitives, with 1-work-item-per-predicate
+    Kokkos::parallel_for("ArborX::BruteForce::query::spatial::"
+                         "check_all_predicates_against_all_primitives_noshared",
+                         Kokkos::RangePolicy<ExecutionSpace>(
+                         space, 0, n_predicates),
+                         KOKKOS_LAMBDA(int queryIndex){
+
+        // Predicate for this thread
+        auto const &predicate = AccessPredicates::get(predicates, queryIndex);
+
+        // Check against primitives
+        for (int i=0; i<n_primitives; i++){
+            auto const &primitive = AccessPrimitives::get(primitives, i);
+            if (predicate(primitive)){
+               callback(predicate, i);
+            }
+        }
+    });
+  }
+
 };
 } // namespace Details
 } // namespace ArborX
