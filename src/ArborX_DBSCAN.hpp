@@ -17,6 +17,7 @@
 #include <ArborX_DetailsFDBSCAN.hpp>
 #include <ArborX_DetailsFDBSCANDenseBox.hpp>
 #include <ArborX_DetailsHalfTraversal.hpp>
+//#include <ArborX_DetailsHalfTraversalBruteForce.hpp>
 #include <ArborX_DetailsSortUtils.hpp>
 #include <ArborX_HyperBox.hpp>
 #include <ArborX_HyperSphere.hpp>
@@ -262,8 +263,7 @@ brutebvh<typename ExecutionSpace::memory_space,
    using MemorySpace = typename Access::memory_space;
    static_assert(std::is_same_v<MemorySpace, typename ExecutionSpace::memory_space >);
 
-   constexpr int dim = GeometryTraits::dimension_v<
-      typename Details::AccessTraitsHelper<Access>::type>;
+   constexpr int dim = GeometryTraits::dimension_v<typename Details::AccessTraitsHelper<Access>::type>;
    using Box = ExperimentalHyperGeometry::Box<dim>;
 
    if (tree == "bvh") return BasicBoundingVolumeHierarchy<MemorySpace, Box>(exec_space, primitives);
@@ -272,6 +272,42 @@ brutebvh<typename ExecutionSpace::memory_space,
 
    // Monostate should return error since this indicates an invalid choice
 }
+
+
+// Visitor for HalfTraversal
+template <typename ExecutionSpace, typename Predicates, typename Callback, typename RadiusGetter, typename Brute, typename BVH, typename Primitives, typename CorePoints>
+struct halftraversal_visitor
+{
+
+  ExecutionSpace const &exec_space;
+  Predicates predicates;
+  Callback callback;
+  RadiusGetter radiusgetter;
+
+  using Access = AccessTraits<Primitives, PrimitivesTag>;
+  using MemorySpace = typename Access::memory_space;
+  using UnionFind = Details::UnionFind<MemorySpace>;
+//  using CorePoints = Details::CCSCorePoints;
+  using HalfTraversal = Details::HalfTraversal<
+        BVH, Details::FDBSCANCallback<UnionFind, CorePoints>,
+        Details::WithinRadiusGetter>;
+
+  // If bru_or_bvh has a 'BVH' object, I want to call this:
+  void operator()(BVH bvh){
+     HalfTraversal(exec_space,
+		   bvh,
+		   callback,
+		   radiusgetter);
+  }
+  // If bru_or_bvh has a 'Brute' object, I want to call this:
+  void operator()(Brute brute){
+// TO DO: fix issue with DIM=2
+//     brute.query(exec_space, predicates, callback);
+  }
+
+  void operator()(std::monostate tree){};
+
+};
 
 // Visitor for query
 template <typename ExecutionSpace, typename Predicates, typename Callback>
@@ -289,9 +325,6 @@ struct query_visitor
   void operator()(std::monostate tree){};
 
 };
-
-// Visitor for HalfTraversal goes here
-
 template <typename ExecutionSpace, typename Primitives>
 Kokkos::View<int *,
              typename AccessTraits<Primitives, PrimitivesTag>::memory_space>
@@ -348,11 +381,15 @@ dbscan(ExecutionSpace const &exec_space, Primitives const &primitives,
     BasicBoundingVolumeHierarchy<MemorySpace, Box> bvh(exec_space, primitives);
     Kokkos::Profiling::popRegion();
 
+    // PT: predicates will go away in HalfTraversal version
+    //auto const predicates = Details::PrimitivesWithRadius<Primitives>{primitives, eps};
+
     Kokkos::Profiling::pushRegion("ArborX::DBSCAN::clusters");
     if (is_special_case)
     {
       // Perform the queries and build clusters through callback
       using CorePoints = Details::CCSCorePoints;
+
 #if defined(KOKKOS_COMPILER_NVCC) && (KOKKOS_COMPILER_NVCC < 1140)
       // Workaround a compiler bug
       using HalfTraversal = Details::HalfTraversal<
@@ -362,11 +399,46 @@ dbscan(ExecutionSpace const &exec_space, Primitives const &primitives,
       using Details::HalfTraversal;
 #endif
       Kokkos::Profiling::pushRegion("ArborX::DBSCAN::clusters::query");
-      HalfTraversal(
-          exec_space, bvh,
-          Details::FDBSCANCallback<UnionFind, CorePoints>{labels, CorePoints{}},
-          Details::WithinRadiusGetter{eps});
-      Kokkos::Profiling::popRegion();
+      // Query via call to visitor (worked previously)
+      // Templated above via: template <typename ExecutionSpace, typename Predicates, typename Callback>
+//      std::visit( query_visitor
+//                        <
+//                         ExecutionSpace,
+//                         Details::PrimitivesWithRadius<Primitives>,
+//                         Details::FDBSCANCallback<UnionFind, CorePoints>
+//                        >
+//                        {
+//                         exec_space,
+//                         predicates,
+//                         Details::FDBSCANCallback<UnionFind, CorePoints>{labels, core_points}
+//                        }, bru_or_bvh );
+
+      // PT halftraversal_visitor UNDER CONSTRUCTION
+      CorePoints core_points; // tmp
+      std::visit( halftraversal_visitor
+                        <
+                         ExecutionSpace,                                     // typename for ExecutionSpace  
+                         Details::PrimitivesWithRadius<Primitives>,          // typename for Predicates
+                         Details::FDBSCANCallback<UnionFind, CorePoints>,    // typename for Callback
+                         Details::WithinRadiusGetter,                        // typename for RadiusGetter
+                         ArborX::BruteForce<MemorySpace, Box>,               // typename for Brute -- define in visitor?
+                         BasicBoundingVolumeHierarchy<MemorySpace, Box>,     // typename for BVH   -- define in visitor?
+			 Primitives,                                         // typename for Primitives
+			 Details::CCSCorePoints                              // typename for CorePoints
+                        >
+                        {
+                         exec_space,                                         // instance of ExecutionSpace
+                         Details::PrimitivesWithRadius<Primitives>{primitives, eps}, // instance of Predicates
+                         Details::FDBSCANCallback<UnionFind, CorePoints>{labels, core_points}, // instance of Callback
+                         Details::WithinRadiusGetter{eps}                    // instance of RadiusGetter
+                        }, bru_or_bvh );
+
+   // PT: replace above with HalfTraversal visitor 
+//      HalfTraversal(
+//          exec_space, bvh,
+//          Details::FDBSCANCallback<UnionFind, CorePoints>{labels, CorePoints{}},
+//          Details::WithinRadiusGetter{eps});
+//      Kokkos::Profiling::popRegion();
     }
     else
     {
@@ -376,10 +448,12 @@ dbscan(ExecutionSpace const &exec_space, Primitives const &primitives,
       // Determine core points
       Kokkos::Profiling::pushRegion("ArborX::DBSCAN::clusters::num_neigh");
       Kokkos::resize(Kokkos::view_alloc(exec_space), num_neigh, n);
+      // Query via call to visitor
       std::visit( query_visitor<ExecutionSpace, Details::PrimitivesWithRadius<Primitives>,
                   Details::CountUpToN<MemorySpace>>{exec_space, predicates,
                   Details::CountUpToN<MemorySpace>{num_neigh, core_min_size}},
                   bru_or_bvh );
+      // PT: visitor will eventually replace query call below
 //      bvh.query(exec_space, predicates,
 //                Details::CountUpToN<MemorySpace>{num_neigh, core_min_size});
       Kokkos::Profiling::popRegion();
@@ -396,11 +470,36 @@ dbscan(ExecutionSpace const &exec_space, Primitives const &primitives,
 
       // Perform the queries and build clusters through callback
       Kokkos::Profiling::pushRegion("ArborX::DBSCAN::clusters::query");
-      HalfTraversal(exec_space, bvh,
-                    Details::FDBSCANCallback<UnionFind, CorePoints>{
-                        labels, CorePoints{num_neigh, core_min_size}},
-                    Details::WithinRadiusGetter{eps});
-      Kokkos::Profiling::popRegion();
+      // Query via call to visitor
+//      std::visit( query_visitor<ExecutionSpace, Details::PrimitivesWithRadius<Primitives>,
+//                  Details::FDBSCANCallback<UnionFind, CorePoints>>{exec_space, predicates,
+//                  Details::FDBSCANCallback<UnionFind, CorePoints>{labels, CorePoints{num_neigh, core_min_size}}},
+//                  bru_or_bvh );
+      // PT halftraversal_visitor UNDER CONSTRUCTION
+      std::visit( halftraversal_visitor
+                        <
+                         ExecutionSpace,                                     // typename for ExecutionSpace  
+                         Details::PrimitivesWithRadius<Primitives>,          // typename for Predicates
+                         Details::FDBSCANCallback<UnionFind, CorePoints>,    // typename for Callback
+                         Details::WithinRadiusGetter,                        // typename for RadiusGetter
+                         ArborX::BruteForce<MemorySpace, Box>,               // typename for Brute -- define in visitor?
+                         BasicBoundingVolumeHierarchy<MemorySpace, Box>,     // typename for BVH   -- define in visitor?
+                         Primitives,                                         // typename for Primitives
+			 Details::DBSCANCorePoints<MemorySpace>              // typename for CorePoints
+                        >
+                        {
+                         exec_space,                                         // instance of ExecutionSpace
+                         Details::PrimitivesWithRadius<Primitives>{primitives, eps}, // instance of Predicates
+                         Details::FDBSCANCallback<UnionFind, CorePoints>{labels, CorePoints{num_neigh, core_min_size}}, // instance of Callback
+                         Details::WithinRadiusGetter{eps}                    // instance of RadiusGetter
+                        }, bru_or_bvh );
+
+      // PT: replace above with HalfTraversal visitor
+//      HalfTraversal(exec_space, bvh,
+//                    Details::FDBSCANCallback<UnionFind, CorePoints>{
+//                        labels, CorePoints{num_neigh, core_min_size}},
+//                    Details::WithinRadiusGetter{eps});
+//      Kokkos::Profiling::popRegion();
     }
   }
   else if (parameters._implementation ==
