@@ -1,5 +1,5 @@
 /****************************************************************************
- * Copyright (c) 2017-2022 by the ArborX authors                            *
+ * Copyright (c) 2017-2023 by the ArborX authors                            *
  * All rights reserved.                                                     *
  *                                                                          *
  * This file is part of the ArborX library. ArborX is                       *
@@ -37,8 +37,7 @@ struct TreeVisualization
   {
     auto const node_is_leaf = HappyTreeFriends::isLeaf(tree, node);
     auto const node_index =
-        node_is_leaf ? HappyTreeFriends::getLeafPermutationIndex(tree, node)
-                     : node;
+        node_is_leaf ? HappyTreeFriends::getValue(tree, node).index : node;
     std::string label = node_is_leaf ? "l" : "i";
     label.append(std::to_string(node_index));
     return label;
@@ -121,7 +120,9 @@ struct TreeVisualization
       auto const node_label = getNodeLabel(tree, node);
       auto const node_attributes = getNodeAttributes(tree, node);
       auto const bounding_volume =
-          HappyTreeFriends::getBoundingVolume(tree, node);
+          HappyTreeFriends::isLeaf(tree, node)
+              ? HappyTreeFriends::getLeafBoundingVolume(tree, node)
+              : HappyTreeFriends::getInternalBoundingVolume(tree, node);
       auto const min_corner = bounding_volume.minCorner();
       auto const max_corner = bounding_volume.maxCorner();
       _os << R"(\draw)" << node_attributes << " " << min_corner << " rectangle "
@@ -152,9 +153,10 @@ struct TreeVisualization
   struct VisitorCallback
   {
     template <typename Query>
-    KOKKOS_FUNCTION void operator()(Query const &, int index) const
+    KOKKOS_FUNCTION void
+    operator()(Query const &, typename TreeType::value_type const &value) const
     {
-      _visitor.visit(_tree, permute(index));
+      _visitor.visit(_tree, permute(value.index));
     }
 
     TreeType _tree;
@@ -188,9 +190,8 @@ struct TreeVisualization
                     n);
     Kokkos::parallel_for(
         "ArborX::Viz::compute_permutation",
-        Kokkos::RangePolicy<ExecutionSpace>(space, n - 1, 2 * n - 1),
-        KOKKOS_LAMBDA(int i) {
-          permute(HappyTreeFriends::getLeafPermutationIndex(tree, i)) = i;
+        Kokkos::RangePolicy<ExecutionSpace>(space, 0, n), KOKKOS_LAMBDA(int i) {
+          permute(HappyTreeFriends::getValue(tree, i).index) = i;
         });
 
     Predicates predicates(Kokkos::view_alloc(space, Kokkos::WithoutInitializing,

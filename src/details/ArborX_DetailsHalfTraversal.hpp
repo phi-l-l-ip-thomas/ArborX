@@ -12,6 +12,7 @@
 #ifndef ARBORX_DETAILS_HALF_TRAVERSAL_HPP
 #define ARBORX_DETAILS_HALF_TRAVERSAL_HPP
 
+#include <ArborX_Callbacks.hpp> // LegacyCallbackWrapper
 #include <ArborX_DetailsHappyTreeFriends.hpp>
 #include <ArborX_DetailsNode.hpp> // ROPE_SENTINEL
 
@@ -25,7 +26,7 @@ struct HalfTraversal
 {
   BVH _bvh;
   PredicateGetter _get_predicate;
-  Callback _callback;
+  LegacyCallbackWrapper<Callback, typename BVH::value_type> _callback;
 
   template <class ExecutionSpace>
   HalfTraversal(ExecutionSpace const &space, BVH const &bvh,
@@ -44,34 +45,36 @@ struct HalfTraversal
     }
     else
     {
-      auto const n = _bvh.size();
       Kokkos::parallel_for(
           "ArborX::Experimental::HalfTraversal",
-          Kokkos::RangePolicy<ExecutionSpace>(space, n - 1, 2 * n - 1), *this);
+          Kokkos::RangePolicy<ExecutionSpace>(space, 0, _bvh.size()), *this);
     }
   }
 
   KOKKOS_FUNCTION void operator()(int i) const
   {
     auto const predicate =
-        _get_predicate(HappyTreeFriends::getBoundingVolume(_bvh, i));
-    auto const leaf_permutation_i =
-        HappyTreeFriends::getLeafPermutationIndex(_bvh, i);
+        _get_predicate(HappyTreeFriends::getLeafBoundingVolume(_bvh, i));
+    auto const leaf_permutation_i = HappyTreeFriends::getValue(_bvh, i).index;
 
     int node = HappyTreeFriends::getRope(_bvh, i);
     while (node != ROPE_SENTINEL)
     {
-      if (predicate(HappyTreeFriends::getBoundingVolume(_bvh, node)))
+      bool const is_leaf = HappyTreeFriends::isLeaf(_bvh, node);
+
+      if (predicate(
+              (is_leaf
+                   ? HappyTreeFriends::getLeafBoundingVolume(_bvh, node)
+                   : HappyTreeFriends::getInternalBoundingVolume(_bvh, node))))
       {
-        if (!HappyTreeFriends::isLeaf(_bvh, node))
+        if (is_leaf)
         {
-          node = HappyTreeFriends::getLeftChild(_bvh, node);
+          _callback(leaf_permutation_i, HappyTreeFriends::getValue(_bvh, node));
+          node = HappyTreeFriends::getRope(_bvh, node);
         }
         else
         {
-          _callback(leaf_permutation_i,
-                    HappyTreeFriends::getLeafPermutationIndex(_bvh, node));
-          node = HappyTreeFriends::getRope(_bvh, node);
+          node = HappyTreeFriends::getLeftChild(_bvh, node);
         }
       }
       else
