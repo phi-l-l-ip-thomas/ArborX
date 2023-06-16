@@ -78,7 +78,7 @@ struct TreeTraversal<BVH, Predicates, Callback, SpatialPredicateTag>
     auto const &predicate = Access::get(_predicates, queryIndex);
     auto const root = 0;
     auto const &root_bounding_volume =
-        HappyTreeFriends::getLeafBoundingVolume(_bvh, root);
+        HappyTreeFriends::getIndexable(_bvh, root);
     if (predicate(root_bounding_volume))
     {
       _callback(predicate, HappyTreeFriends::getValue(_bvh, 0));
@@ -94,10 +94,9 @@ struct TreeTraversal<BVH, Predicates, Callback, SpatialPredicateTag>
     {
       bool const is_leaf = HappyTreeFriends::isLeaf(_bvh, node);
 
-      if (predicate(
-              (is_leaf
-                   ? HappyTreeFriends::getLeafBoundingVolume(_bvh, node)
-                   : HappyTreeFriends::getInternalBoundingVolume(_bvh, node))))
+      if (is_leaf ? predicate(HappyTreeFriends::getIndexable(_bvh, node))
+                  : predicate(HappyTreeFriends::getInternalBoundingVolume(
+                        _bvh, node)))
       {
         if (is_leaf)
         {
@@ -261,10 +260,10 @@ struct TreeTraversal<BVH, Predicates, Callback, NearestPredicateTag>
 
     auto &bvh = _bvh;
     auto const distance = [&predicate, &bvh](int j) {
-      return predicate.distance(
-          HappyTreeFriends::isLeaf(bvh, j)
-              ? HappyTreeFriends::getLeafBoundingVolume(bvh, j)
-              : HappyTreeFriends::getInternalBoundingVolume(bvh, j));
+      return HappyTreeFriends::isLeaf(bvh, j)
+                 ? predicate.distance(HappyTreeFriends::getIndexable(bvh, j))
+                 : predicate.distance(
+                       HappyTreeFriends::getInternalBoundingVolume(bvh, j));
     };
 
     constexpr int SENTINEL = -1;
@@ -431,7 +430,7 @@ struct TreeTraversal<BVH, Predicates, Callback,
     auto const &predicate = Access::get(_predicates, queryIndex);
     auto const root = 0;
     auto const &root_bounding_volume =
-        HappyTreeFriends::getLeafBoundingVolume(_bvh, root);
+        HappyTreeFriends::getIndexable(_bvh, root);
     using distance_type =
         decltype(distance(getGeometry(predicate), root_bounding_volume));
     constexpr auto inf =
@@ -470,10 +469,10 @@ struct TreeTraversal<BVH, Predicates, Callback,
 
     auto &bvh = _bvh;
     auto const distance = [&predicate, &bvh](int j) {
-      return predicate.distance(
-          HappyTreeFriends::isLeaf(bvh, j)
-              ? HappyTreeFriends::getLeafBoundingVolume(bvh, j)
-              : HappyTreeFriends::getInternalBoundingVolume(bvh, j));
+      return HappyTreeFriends::isLeaf(bvh, j)
+                 ? predicate.distance(HappyTreeFriends::getIndexable(bvh, j))
+                 : predicate.distance(
+                       HappyTreeFriends::getInternalBoundingVolume(bvh, j));
     };
 
     int node = HappyTreeFriends::getRoot(_bvh);
