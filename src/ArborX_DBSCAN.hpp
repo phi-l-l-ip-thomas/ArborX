@@ -286,11 +286,22 @@ struct halftraversal_visitor
 
   using Access = AccessTraits<Primitives, PrimitivesTag>;
   using MemorySpace = typename Access::memory_space;
+//  using UnionFind = Details::UnionFind<MemorySpace>;
+
+#ifdef KOKKOS_ENABLE_SERIAL
+  using UnionFind = Details::UnionFind<MemorySpace,
+      /*DoSerial=*/std::is_same_v<ExecutionSpace, Kokkos::Serial>>;
+#else
   using UnionFind = Details::UnionFind<MemorySpace>;
-//  using CorePoints = Details::CCSCorePoints;
+#endif
+
+//#if defined(KOKKOS_COMPILER_NVCC) && (KOKKOS_COMPILER_NVCC < 1140)
   using HalfTraversal = Details::HalfTraversal<
         BVH, Details::FDBSCANCallback<UnionFind, CorePoints>,
         Details::WithinRadiusGetter>;
+//#else
+//  using Details::HalfTraversal;
+//#endif
 
   // If bru_or_bvh has a 'BVH' object, I want to call this:
   void operator()(BVH bvh){
@@ -301,7 +312,7 @@ struct halftraversal_visitor
   }
   // If bru_or_bvh has a 'Brute' object, I want to call this:
   void operator()(Brute brute){
-// TO DO: fix issue with DIM=2
+// TO DO: fix issue with brute force callback
 //     brute.query(exec_space, predicates, callback);
   }
 
@@ -378,7 +389,7 @@ dbscan(ExecutionSpace const &exec_space, Primitives const &primitives,
 //  PT: Variant decl.
     brutebvh<MemorySpace, Box> bru_or_bvh = select_tree(parameters._tree, exec_space, primitives);
 //
-    BasicBoundingVolumeHierarchy<MemorySpace, Box> bvh(exec_space, primitives);
+//    BasicBoundingVolumeHierarchy<MemorySpace, Box> bvh(exec_space, primitives);
     Kokkos::Profiling::popRegion();
 
     // PT: predicates will go away in HalfTraversal version
@@ -390,6 +401,7 @@ dbscan(ExecutionSpace const &exec_space, Primitives const &primitives,
       // Perform the queries and build clusters through callback
       using CorePoints = Details::CCSCorePoints;
 
+/*
 #if defined(KOKKOS_COMPILER_NVCC) && (KOKKOS_COMPILER_NVCC < 1140)
       // Workaround a compiler bug
       using HalfTraversal = Details::HalfTraversal<
@@ -398,6 +410,7 @@ dbscan(ExecutionSpace const &exec_space, Primitives const &primitives,
 #else
       using Details::HalfTraversal;
 #endif
+*/
       Kokkos::Profiling::pushRegion("ArborX::DBSCAN::clusters::query");
       // Query via call to visitor (worked previously)
       // Templated above via: template <typename ExecutionSpace, typename Predicates, typename Callback>
@@ -459,6 +472,7 @@ dbscan(ExecutionSpace const &exec_space, Primitives const &primitives,
       Kokkos::Profiling::popRegion();
 
       using CorePoints = Details::DBSCANCorePoints<MemorySpace>;
+/*
 #if defined(KOKKOS_COMPILER_NVCC) && (KOKKOS_COMPILER_NVCC < 1140)
       // Workaround a compiler bug
       using HalfTraversal = Details::HalfTraversal<
@@ -467,7 +481,7 @@ dbscan(ExecutionSpace const &exec_space, Primitives const &primitives,
 #else
       using Details::HalfTraversal;
 #endif
-
+*/
       // Perform the queries and build clusters through callback
       Kokkos::Profiling::pushRegion("ArborX::DBSCAN::clusters::query");
       // Query via call to visitor
