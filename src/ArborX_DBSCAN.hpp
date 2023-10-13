@@ -313,7 +313,7 @@ struct halftraversal_visitor
   // If bru_or_bvh has a 'Brute' object, I want to call this:
   void operator()(Brute brute){
 // TO DO: fix issue with brute force callback
-//     brute.query(exec_space, predicates, callback);
+     brute.query(exec_space, predicates, callback);
   }
 
   void operator()(std::monostate tree){};
