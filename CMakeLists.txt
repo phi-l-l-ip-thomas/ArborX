@@ -16,6 +16,12 @@ set_target_properties(ArborX PROPERTIES INTERFACE_COMPILE_FEATURES cxx_std_17)
 # within a subdirectory.
 add_dependencies(ArborX record_hash)
 
+### PT add
+find_package(KokkosKernels REQUIRED CONFIG)
+message(STATUS "Found KokkosKernels: ${KokkosKernels_DIR} (version \"${KokkosKernels_VERSION}\")")
+target_link_libraries(ArborX INTERFACE Kokkos::kokkoskernels)
+###
+
 include(CMakeDependentOption)
 cmake_dependent_option(ARBORX_ENABLE_ROCTHRUST "Enable rocThrust support" ON "Kokkos_ENABLE_HIP" OFF)
 if(Kokkos_ENABLE_HIP AND ARBORX_ENABLE_ROCTHRUST)

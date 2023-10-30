@@ -15,8 +15,8 @@
 #include <ArborX_AccessTraits.hpp>
 #include <ArborX_DetailsAlgorithms.hpp> // expand
 #include <ArborX_Exception.hpp>
-
 #include <Kokkos_Core.hpp>
+#include <KokkosBlas3_gemm.hpp>
 
 namespace ArborX
 {
@@ -50,7 +50,7 @@ struct BruteForceImpl
 
   template <class ExecutionSpace, class Primitives, class Predicates,
             class Callback>
-  static void query(ExecutionSpace const &space, Primitives const &primitives,
+  static void queryO(ExecutionSpace const &space, Primitives const &primitives,
                     Predicates const &predicates, Callback const &callback)
   {
     using TeamPolicy = Kokkos::TeamPolicy<ExecutionSpace>;
@@ -141,6 +141,78 @@ struct BruteForceImpl
               });
         });
   }
+
+  template <class ExecutionSpace, class Primitives, class Predicates,
+            class Callback>
+  static void query(ExecutionSpace const &space, Primitives const &primitives,
+                    Predicates const &predicates, Callback const &callback)
+  {
+    using TeamPolicy = Kokkos::TeamPolicy<ExecutionSpace>;
+    using AccessPrimitives = AccessTraits<Primitives, PrimitivesTag>;
+    using AccessPredicates = AccessTraits<Predicates, PredicatesTag>;
+    using PredicateType = typename AccessTraitsHelper<AccessPredicates>::type;
+    using PrimitiveType = typename AccessTraitsHelper<AccessPrimitives>::type;
+
+    using MemorySpacePrimitives = typename AccessPrimitives::memory_space;
+    using MemorySpacePredicates = typename AccessPredicates::memory_space;
+
+    int const n_primitives = AccessPrimitives::size(primitives);
+    int const n_predicates = AccessPredicates::size(predicates);
+
+    const char tA[] = {"N"};
+    const char tB[] = {"T"};
+
+    constexpr int DIM = GeometryTraits::dimension_v<
+            typename Details::AccessTraitsHelper<AccessPrimitives>::type>;
+
+    const double alpha = 1.0;
+    const double beta = 0.0;
+
+    Kokkos::View<PrimitiveType **, Kokkos::LayoutLeft, MemorySpacePrimitives> A ("primitives view", n_primitives, DIM );
+    Kokkos::View<PredicateType **, Kokkos::LayoutLeft, MemorySpacePredicates> B ("predicates view", n_predicates, DIM );
+// PT: check type, add memoryspace to C
+    Kokkos::View<float **, Kokkos::LayoutLeft> C ("distance view", n_primitives, n_predicates );
+
+// Fill A and B arrays, with primitives and predicates, respectively.
+    Kokkos::parallel_for("ArborX::BruteForce::query::spatial::"
+                         "fill_primitives_array",
+                         Kokkos::RangePolicy<ExecutionSpace>(
+                         space, 0, n_primitives),
+                         KOKKOS_LAMBDA(int q){
+
+        // Primitive for this thread
+        auto const &primitive = AccessPrimitives::get(primitives, q);
+        for (int j=0; j<DIM; j++){
+// PT: build issue below: new brute/bvh interface needed to fix
+            A(q,j) = primitive[j];
+	}
+    });
+
+/*
+    Kokkos::parallel_for("ArborX::BruteForce::query::spatial::"
+                         "fill_predicates_array",
+                         Kokkos::RangePolicy<ExecutionSpace>(
+                         space, 0, n_predicates*DIM),
+                         KOKKOS_LAMBDA(int q){
+
+        // Predicate and dimension for this thread (compare performance)
+	int i =  q / DIM;
+        int j =  q % DIM;
+        auto const &predicate = AccessPredicates::get(predicates, i);
+	B(i,j) = predicate(j);
+    });
+
+// Call gemm to compute the distances
+//    KokkosBlas::gemm(space, tA, tB, alpha, A, B, beta, C );
+*/
+
+// PT: callback here
+// C is the matrix of distances between primitives in A and predicates in B.
+
+// PT add destructors for A,B,C
+
+  }
+
 };
 } // namespace Details
 } // namespace ArborX
