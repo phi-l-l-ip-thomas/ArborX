@@ -394,7 +394,7 @@ int main(int argc, char *argv[])
   // Now check that the results we got are the same apart from numerical errors
   // introduced by depositing energy to a particular cell from separate rays
   // in different order.
-  int n_errors = 0;
+  int n_errors;
   float rel_tol = 1.e-5;
   Kokkos::parallel_reduce(
       "Example::compare",
@@ -406,11 +406,14 @@ int main(int argc, char *argv[])
             fabs(energy_intersects(i));
         if (abs_error > rel_tol * fabs(energy_intersects(i)))
         {
-#ifndef KOKKOS_ENABLE_SYCL
+#if KOKKOS_VERSION >= 40200
+          using Kokkos::printf;
+#elif defined(__SYCL_DEVICE_ONLY__)
+          using sycl::ext::oneapi::experimental::printf;
+#endif
           printf("%d: %f != %f, relative error: %f\n", i,
                  energy_ordered_intersects(i), energy_intersects(i),
                  abs_error / fabs(energy_intersects(i)));
-#endif
           ++error;
         }
       },

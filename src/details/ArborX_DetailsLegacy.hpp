@@ -36,7 +36,7 @@ public:
   {}
 
   KOKKOS_FUNCTION
-  decltype(auto) operator()(size_type i) const
+  auto operator()(size_type i) const
   {
     if constexpr (std::is_same_v<BoundingVolume,
                                  typename AccessTraitsHelper<Access>::type>)
@@ -55,19 +55,59 @@ public:
   size_type size() const { return Access::size(_primitives); }
 };
 
-template <typename Callback, typename Value>
+template <typename Callback>
 struct LegacyCallbackWrapper
 {
   Callback _callback;
 
-  template <typename Predicate>
+  template <typename Predicate, typename Geometry>
   KOKKOS_FUNCTION auto operator()(Predicate const &predicate,
-                                  Value const &value) const
+                                  PairIndexVolume<Geometry> const &value) const
   {
     return _callback(predicate, value.index);
+  }
+
+  template <typename Predicate, typename Geometry, typename Output>
+  KOKKOS_FUNCTION auto operator()(Predicate const &predicate,
+                                  PairIndexVolume<Geometry> const &value,
+                                  Output const &out) const
+  {
+    return _callback(predicate, value.index, out);
+  }
+};
+
+struct LegacyDefaultCallback
+{
+  template <typename Query, typename Geometry, typename OutputFunctor>
+  KOKKOS_FUNCTION void operator()(Query const &,
+                                  PairIndexVolume<Geometry> const &value,
+                                  OutputFunctor const &output) const
+  {
+    output(value.index);
   }
 };
 
 } // namespace ArborX::Details
+
+template <typename Primitives, typename BoundingVolume>
+struct ArborX::AccessTraits<
+    ArborX::Details::LegacyValues<Primitives, BoundingVolume>,
+    ArborX::PrimitivesTag>
+{
+  using Values = ArborX::Details::LegacyValues<Primitives, BoundingVolume>;
+
+  using memory_space = typename Values::memory_space;
+  using size_type = typename Values::size_type;
+  using value_type = typename Values::value_type;
+
+  KOKKOS_FUNCTION static size_type size(Values const &values)
+  {
+    return values.size();
+  }
+  KOKKOS_FUNCTION static decltype(auto) get(Values const &values, size_type i)
+  {
+    return values(i);
+  }
+};
 
 #endif

@@ -38,7 +38,7 @@ bool verifyCorePointsNonnegativeIndex(ExecutionSpace const &exec_space,
 {
   int n = labels.size();
 
-  int num_incorrect = 0;
+  int num_incorrect;
   Kokkos::parallel_reduce(
       "ArborX::DBSCAN::verify_core_points_nonnegative",
       Kokkos::RangePolicy<ExecutionSpace>(exec_space, 0, n),
@@ -46,7 +46,9 @@ bool verifyCorePointsNonnegativeIndex(ExecutionSpace const &exec_space,
         bool self_is_core_point = (offset(i + 1) - offset(i) >= core_min_size);
         if (self_is_core_point && labels(i) < 0)
         {
-#ifdef __SYCL_DEVICE_ONLY__
+#if KOKKOS_VERSION >= 40200
+          using Kokkos::printf;
+#elif defined(__SYCL_DEVICE_ONLY__)
           using sycl::ext::oneapi::experimental::printf;
 #endif
           printf("Core point is marked as noise: %d [%d]\n", i, labels(i));
@@ -66,7 +68,7 @@ bool verifyConnectedCorePointsShareIndex(ExecutionSpace const &exec_space,
 {
   int n = labels.size();
 
-  int num_incorrect = 0;
+  int num_incorrect;
   Kokkos::parallel_reduce(
       "ArborX::DBSCAN::verify_connected_core_points",
       Kokkos::RangePolicy<ExecutionSpace>(exec_space, 0, n),
@@ -82,7 +84,9 @@ bool verifyConnectedCorePointsShareIndex(ExecutionSpace const &exec_space,
 
             if (neigh_is_core_point && labels(i) != labels(j))
             {
-#ifdef __SYCL_DEVICE_ONLY__
+#if KOKKOS_VERSION >= 40200
+              using Kokkos::printf;
+#elif defined(__SYCL_DEVICE_ONLY__)
               using sycl::ext::oneapi::experimental::printf;
 #endif
               printf("Connected cores do not belong to the same cluster: "
@@ -107,7 +111,7 @@ bool verifyBorderAndNoisePoints(ExecutionSpace const &exec_space,
 {
   int n = labels.size();
 
-  int num_incorrect = 0;
+  int num_incorrect;
   Kokkos::parallel_reduce(
       "ArborX::DBSCAN::verify_connected_border_points",
       Kokkos::RangePolicy<ExecutionSpace>(exec_space, 0, n),
@@ -134,12 +138,15 @@ bool verifyBorderAndNoisePoints(ExecutionSpace const &exec_space,
             }
           }
 
+#if KOKKOS_VERSION >= 40200
+          using Kokkos::printf;
+#elif defined(__SYCL_DEVICE_ONLY__)
+          using sycl::ext::oneapi::experimental::printf;
+#endif
+
           // Border point must be connected to a core point
           if (is_border && !have_shared_core)
           {
-#ifdef __SYCL_DEVICE_ONLY__
-            using sycl::ext::oneapi::experimental::printf;
-#endif
             printf("Border point does not belong to a cluster: %d [%d]\n", i,
                    labels(i));
             update++;
@@ -147,9 +154,6 @@ bool verifyBorderAndNoisePoints(ExecutionSpace const &exec_space,
           // Noise points must have index -1
           if (!is_border && labels(i) != -1)
           {
-#ifdef __SYCL_DEVICE_ONLY__
-            using sycl::ext::oneapi::experimental::printf;
-#endif
             printf("Noise point does not have index -1: %d [%d]\n", i,
                    labels(i));
             update++;
@@ -303,19 +307,22 @@ bool verifyDBSCAN(ExecutionSpace exec_space, Primitives const &primitives,
   ARBORX_ASSERT(eps > 0);
   ARBORX_ASSERT(core_min_size >= 2);
 
-  constexpr int dim = GeometryTraits::dimension_v<
-      typename Details::AccessTraitsHelper<Access>::type>;
+  using Point = typename Details::AccessTraitsHelper<Access>::type;
+  static_assert(GeometryTraits::is_point<Point>{});
+  constexpr int dim = GeometryTraits::dimension_v<Point>;
   using Box = ExperimentalHyperGeometry::Box<dim>;
   ArborX::BasicBoundingVolumeHierarchy<MemorySpace,
                                        ArborX::Details::PairIndexVolume<Box>>
-      bvh(exec_space, primitives);
+      bvh(exec_space,
+          ArborX::Details::LegacyValues<Primitives, Box>{primitives});
 
   auto const predicates =
       Details::PrimitivesWithRadius<Primitives>{primitives, eps};
 
   Kokkos::View<int *, MemorySpace> indices("ArborX::DBSCAN::indices", 0);
   Kokkos::View<int *, MemorySpace> offset("ArborX::DBSCAN::offset", 0);
-  ArborX::query(bvh, exec_space, predicates, indices, offset);
+  ArborX::query(bvh, exec_space, predicates,
+                ArborX::Details::LegacyDefaultCallback{}, indices, offset);
 
   auto passed = Details::verifyClusters(exec_space, indices, offset, labels,
                                         core_min_size);
