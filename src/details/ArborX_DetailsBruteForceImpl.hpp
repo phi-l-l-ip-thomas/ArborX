@@ -48,7 +48,7 @@ struct BruteForceImpl
 
   template <class ExecutionSpace, class Predicates, class Values,
             class Indexables, class Callback>
-  static void query(ExecutionSpace const &space, Predicates const &predicates,
+  static void queryO(ExecutionSpace const &space, Predicates const &predicates,
                     Values const &values, Indexables const &indexables,
                     Callback const &callback)
   {
@@ -139,74 +139,96 @@ struct BruteForceImpl
         });
   }
 
+/* // Old vsn of call template
   template <class ExecutionSpace, class Primitives, class Predicates,
             class Callback>
   static void queryN(ExecutionSpace const &space, Primitives const &primitives,
                     Predicates const &predicates, Callback const &callback)
+*/
+  template <class ExecutionSpace, class Predicates, class Values,
+            class Indexables, class Callback>
+  static void query(ExecutionSpace const &space, Predicates const &predicates,
+                    Values const &values, Indexables const &indexables,
+                    Callback const &callback)
   {
     using TeamPolicy = Kokkos::TeamPolicy<ExecutionSpace>;
-    using AccessPrimitives = AccessTraits<Primitives, PrimitivesTag>;
-    using AccessPredicates = AccessTraits<Predicates, PredicatesTag>;
-    using PredicateType = typename AccessTraitsHelper<AccessPredicates>::type;
-    using PrimitiveType = typename AccessTraitsHelper<AccessPrimitives>::type;
 
-    using MemorySpacePrimitives = typename AccessPrimitives::memory_space;
+    using AccessIndexables = AccessValues<Values>;
+    using AccessPredicates = AccessTraits<Predicates, PredicatesTag>;
+
+    using IndexableType = std::decay_t<decltype(indexables(0))>;
+
+    using IndexableValueType = typename GeometryTraits::coordinate_type<IndexableType>::type;
+    using PredicateValueType = std::decay_t<decltype(ArborX::getGeometry(AccessPredicates::get(predicates, 0))._centroid[0])>;
+
+    using MemorySpaceIndexables = typename AccessIndexables::memory_space;
     using MemorySpacePredicates = typename AccessPredicates::memory_space;
 
-    int const n_primitives = AccessPrimitives::size(primitives);
+    int const n_indexables = values.size();
     int const n_predicates = AccessPredicates::size(predicates);
 
     const char tA[] = {"N"};
     const char tB[] = {"T"};
 
-    constexpr int DIM = GeometryTraits::dimension_v<
-            typename Details::AccessTraitsHelper<AccessPrimitives>::type>;
+    constexpr int DIM = GeometryTraits::dimension_v<IndexableType>;
 
-    const double alpha = 1.0;
-    const double beta = 0.0;
+    const IndexableValueType alpha = 1.0;
+    const IndexableValueType beta = 0.0;
 
-    Kokkos::View<PrimitiveType **, Kokkos::LayoutLeft, MemorySpacePrimitives> A ("primitives view", n_primitives, DIM );
-    Kokkos::View<PredicateType **, Kokkos::LayoutLeft, MemorySpacePredicates> B ("predicates view", n_predicates, DIM );
-// PT: check type, add memoryspace to C
-    Kokkos::View<float **, Kokkos::LayoutLeft> C ("distance view", n_primitives, n_predicates );
+    // Kokkos Views for dgemm: give result 'C' same type and space as Indexables
+    Kokkos::View<IndexableValueType **, Kokkos::LayoutLeft, MemorySpaceIndexables> A ("indexables view", n_indexables, DIM );
+    Kokkos::View<PredicateValueType **, Kokkos::LayoutLeft, MemorySpacePredicates> B ("predicates view", n_predicates, DIM );
+    Kokkos::View<IndexableValueType **, Kokkos::LayoutLeft, MemorySpaceIndexables> C ("distance view", n_indexables, n_predicates );
 
-// Fill A and B arrays, with primitives and predicates, respectively.
+// Fill A and B arrays, with indexables and predicates, respectively.
     Kokkos::parallel_for("ArborX::BruteForce::query::spatial::"
-                         "fill_primitives_array",
+                         "fill_indexables_array",
                          Kokkos::RangePolicy<ExecutionSpace>(
-                         space, 0, n_primitives),
+                         space, 0, n_indexables*DIM),
                          KOKKOS_LAMBDA(int q){
 
-        // Primitive for this thread
-        auto const &primitive = AccessPrimitives::get(primitives, q);
-        for (int j=0; j<DIM; j++){
-// PT: build issue below: new brute/bvh interface needed to fix
-            A(q,j) = primitive[j];
-	}
+        // Indexable and dimension for this thread
+        int i =  q / DIM;
+        int j =  q % DIM;
+        auto const &primitive = indexables(i);
+        A(i,j) = primitive[j];
     });
 
-/*
     Kokkos::parallel_for("ArborX::BruteForce::query::spatial::"
                          "fill_predicates_array",
                          Kokkos::RangePolicy<ExecutionSpace>(
                          space, 0, n_predicates*DIM),
                          KOKKOS_LAMBDA(int q){
 
-        // Predicate and dimension for this thread (compare performance)
+        // Predicate and dimension for this thread
 	int i =  q / DIM;
         int j =  q % DIM;
         auto const &predicate = AccessPredicates::get(predicates, i);
-	B(i,j) = predicate(j);
+        auto const &geometry = ArborX::getGeometry(predicate);
+	B(i,j) = geometry._centroid[j]; 
     });
 
 // Call gemm to compute the distances
-//    KokkosBlas::gemm(space, tA, tB, alpha, A, B, beta, C );
-*/
+    KokkosBlas::gemm(space, tA, tB, alpha, A, B, beta, C );
 
-// PT: callback here
-// C is the matrix of distances between primitives in A and predicates in B.
+// Compare distances and callback
+    Kokkos::parallel_for("ArborX::BruteForce::query::spatial::"
+                         "fill_predicates_array",
+                         Kokkos::RangePolicy<ExecutionSpace>(
+                         space, 0, n_indexables*n_predicates),
+                         KOKKOS_LAMBDA(int q){
 
-// PT add destructors for A,B,C
+        // Indexable and predicate for this thread
+        int i =  q / n_predicates;
+        int j =  q % n_predicates;
+        auto const &predicate = AccessPredicates::get(predicates, j);
+        auto const &geometry = ArborX::getGeometry(predicate);
+        if (C(i,j) <= geometry._radius)
+        {
+           callback(predicate, values(i));
+        }
+
+    });
 
   }
 
