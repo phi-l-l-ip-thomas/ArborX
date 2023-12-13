@@ -48,7 +48,7 @@ struct BruteForceImpl
 
   template <class ExecutionSpace, class Predicates, class Values,
             class Indexables, class Callback>
-  static void queryO(ExecutionSpace const &space, Predicates const &predicates,
+  static void query_shared(ExecutionSpace const &space, Predicates const &predicates,
                     Values const &values, Indexables const &indexables,
                     Callback const &callback)
   {
@@ -141,41 +141,34 @@ struct BruteForceImpl
 
   template <class ExecutionSpace, class Predicates, class Values,
             class Indexables, class Callback>
-  static void query_experimental(ExecutionSpace const &space, Predicates const &predicates,
+  static void query_tc_expt(ExecutionSpace const &space, Predicates const &predicates,
                     Values const &values, Indexables const &indexables,
                     Callback const &callback)
   {
 
     using AccessIndexables = AccessValues<Values>;
     using AccessPredicates = AccessTraits<Predicates, PredicatesTag>;
-
     using IndexableType = std::decay_t<decltype(indexables(0))>;
-
     using IndexableValueType = typename GeometryTraits::coordinate_type<IndexableType>::type;
     using PredicateValueType = std::decay_t<decltype(ArborX::getGeometry(AccessPredicates::get(predicates, 0))._centroid[0])>;
-
     using MemorySpaceIndexables = typename AccessIndexables::memory_space;
     using MemorySpacePredicates = typename AccessPredicates::memory_space;
 
     int const n_indexables = values.size();
     int const n_predicates = AccessPredicates::size(predicates);
-
+    constexpr int DIM = GeometryTraits::dimension_v<IndexableType>;
     const char tA[] = {"N"};
     const char tB[] = {"T"};
-
-    constexpr int DIM = GeometryTraits::dimension_v<IndexableType>;
-
     const IndexableValueType alpha = -2.0;
     const IndexableValueType beta = 1.0;
 
-    Kokkos::View<IndexableValueType *, Kokkos::LayoutLeft, MemorySpaceIndexables> Asquared ("indexables squared view", n_indexables);
-    Kokkos::View<PredicateValueType *, Kokkos::LayoutLeft, MemorySpacePredicates> Bsquared ("predicates squared view", n_predicates);
+    Kokkos::View<IndexableValueType **, Kokkos::LayoutLeft, MemorySpaceIndexables> Asquared ("indexables squared view", n_indexables, 1);
+    Kokkos::View<PredicateValueType **, Kokkos::LayoutLeft, MemorySpacePredicates> Bsquared ("predicates squared view", n_predicates, 1);
     Kokkos::View<IndexableValueType **, Kokkos::LayoutLeft, MemorySpaceIndexables> A ("indexables view", n_indexables, DIM );
     Kokkos::View<PredicateValueType **, Kokkos::LayoutLeft, MemorySpacePredicates> B ("predicates view", n_predicates, DIM );
     Kokkos::View<IndexableValueType **, Kokkos::LayoutLeft, MemorySpaceIndexables> C ("intersection view", n_indexables, n_predicates );
 
-// Fill arrays containing sums-of-squares of indexables
-//       and -r-squared + sums-of-squares of predicates
+// Fill array containing sums-of-squares of indexables
     Kokkos::parallel_for("ArborX::BruteForce::query::spatial::"
                          "fill_indexables_sums_of_squares_array",
                          Kokkos::RangePolicy<ExecutionSpace>(
@@ -183,14 +176,29 @@ struct BruteForceImpl
                          KOKKOS_LAMBDA(int i){
 
         // Indexable for this thread
-        auto const &primitive = indexables(i);
-	Asquared(i) = 0.0;
+        auto const &indexable = indexables(i);
+	Asquared(i,1) = 0.0;
 
         for (int j=0; j<DIM; j++){
-            Asquared(i) += primitive[j]*primitive[j];
+            Asquared(i,1) += indexable[j]*indexable[j];
 	    }
     });
 
+// Fill array 'Bsquared' with ones
+    Kokkos::parallel_for("ArborX::BruteForce::query::spatial::"
+                         "fill_ones_array_npredicates_size",
+                         Kokkos::RangePolicy<ExecutionSpace>(
+                         space, 0, n_predicates),
+                         KOKKOS_LAMBDA(int i){
+
+        Bsquared(i,1) = 1.0;
+    });
+
+
+// gemm to initialize results array with Asquared values
+   KokkosBlas::gemm(space, tA, tB, 1.0, Asquared, Bsquared, 0.0, C );
+
+// Fill array containing -r-squared + sums-of-squares of predicates
     Kokkos::parallel_for("ArborX::BruteForce::query::spatial::"
                          "fill_predicates_sums_of_squares_array",
                          Kokkos::RangePolicy<ExecutionSpace>(
@@ -200,12 +208,25 @@ struct BruteForceImpl
         // Predicate for this thread
         auto const &predicate = AccessPredicates::get(predicates, i);
         auto const &geometry = ArborX::getGeometry(predicate);
-        Bsquared(i) = -geometry._radius*geometry._radius;
+        Bsquared(i,1) = -geometry._radius*geometry._radius;
 
         for (int j=0; j<DIM; j++){
-            Bsquared(i) += geometry._centroid[j]*geometry._centroid[j];
+            Bsquared(i,1) += geometry._centroid[j]*geometry._centroid[j];
             }
     });
+
+// Fill array 'Asquared' with ones
+    Kokkos::parallel_for("ArborX::BruteForce::query::spatial::"
+                         "fill_ones_array_nindexables_size",
+                         Kokkos::RangePolicy<ExecutionSpace>(
+                         space, 0, n_indexables),
+                         KOKKOS_LAMBDA(int i){
+
+        Asquared(i,1) = 1.0;
+    });
+
+// gemm to accumulate results array with Bsquared values
+   KokkosBlas::gemm(space, tA, tB, 1.0, Asquared, Bsquared, 1.0, C );
 
 // Fill A and B arrays, with indexables and predicates, respectively.
     Kokkos::parallel_for("ArborX::BruteForce::query::spatial::"
@@ -217,8 +238,8 @@ struct BruteForceImpl
         // Indexable and dimension for this thread
         int i =  q / DIM;
         int j =  q % DIM;
-        auto const &primitive = indexables(i);
-        A(i,j) = primitive[j];
+        auto const &indexable = indexables(i);
+        A(i,j) = indexable[j];
     });
 
     Kokkos::parallel_for("ArborX::BruteForce::query::spatial::"
@@ -235,21 +256,8 @@ struct BruteForceImpl
 	B(i,j) = geometry._centroid[j]; 
     });
 
-//  Initialize result array
-    Kokkos::parallel_for("ArborX::BruteForce::query::spatial::"
-                         "initialize_results_array",
-                         Kokkos::RangePolicy<ExecutionSpace>(
-                         space, 0, n_indexables*n_predicates),
-                         KOKKOS_LAMBDA(int q){
-
-        // Indexable and predicate for this thread
-        int i =  q / n_predicates;
-        int j =  q % n_predicates;
-        C(i,j) = Asquared(i) + Bsquared(j);
-    });
-
 // Call gemm to compute the distances
-    KokkosBlas::gemm(space, tA, tB, alpha, A, B, beta, C );
+    KokkosBlas::gemm(space, tA, tB, alpha, A, B, 1.0, C );
 
 // Compare distances and callback
     Kokkos::parallel_for("ArborX::BruteForce::query::spatial::"
@@ -261,9 +269,9 @@ struct BruteForceImpl
         // Indexable and predicate for this thread
         int i =  q / n_predicates;
         int j =  q % n_predicates;
-        auto const &predicate = AccessPredicates::get(predicates, j);
         if (C(i,j) <= 0)
         {
+           auto const &predicate = AccessPredicates::get(predicates, j);
            callback(predicate, values(i));
         }
     });
@@ -273,6 +281,97 @@ struct BruteForceImpl
   template <class ExecutionSpace, class Predicates, class Values,
             class Indexables, class Callback>
   static void query(ExecutionSpace const &space, Predicates const &predicates,
+                    Values const &values, Indexables const &indexables,
+                    Callback const &callback)
+  {
+    using TeamPolicy = Kokkos::TeamPolicy<ExecutionSpace>;
+    using AccessPredicates = AccessTraits<Predicates, PredicatesTag>;
+    using PredicateType = typename AccessTraitsHelper<AccessPredicates>::type;
+    using IndexableType = std::decay_t<decltype(indexables(0))>;
+
+    int const n_indexables = values.size();
+    int const n_predicates = AccessPredicates::size(predicates);
+    constexpr int DIM = GeometryTraits::dimension_v<IndexableType>;
+    int max_scratch_size = TeamPolicy::scratch_size_max(0);
+
+    // Hard-code predicates-per-team; adjust indexables-per-team accordingly
+    // A100-specific tuning from HW/SDK limits/recommendations:
+    // 2048 threads-per-SM / 128 predicates_per_team = 16 teams-per-SM (with 1 predicate-per-team)
+    // 164 KB-per-SM / 16 teams-per-SM = 10.25 KB-per-team = 10496 bytes
+    // 10496 bytes - 16 bytes-static-shared-memory - 1044 bytes-driver-shared-memory = 9436 bytes-per-team
+    int const predicates_per_team = 128;
+    int const indexables_per_team = 32 * std::floor((float(9436) / float(sizeof(IndexableType)) / float(32)));
+//    int const indexables_per_team = 320;
+
+    int const n_indexable_tiles =
+        std::ceil((float)n_indexables / indexables_per_team);
+    int const n_predicate_tiles =
+        std::ceil((float)n_predicates / predicates_per_team);
+    int const n_teams = n_predicate_tiles;
+
+    // Just request scratch for indexables only
+    using ScratchIndexableType =
+        Kokkos::View<IndexableType *,
+                     typename ExecutionSpace::scratch_memory_space,
+                     Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
+    int scratch_size = ScratchIndexableType::shmem_size(indexables_per_team);
+
+    Kokkos::parallel_for(
+        "ArborX::BruteForce::query::spatial::"
+        "all-predicates-vs-all-indexables-shared-128-by-indexable-tile",
+        TeamPolicy(space, n_teams, 128 /*Kokkos::AUTO*/, 1)
+            .set_scratch_size(0, Kokkos::PerTeam(scratch_size)),
+        KOKKOS_LAMBDA(typename TeamPolicy::member_type const &teamMember) {
+
+          // select the tiles of predicates checked by each team
+          int predicate_start = predicates_per_team * teamMember.league_rank();
+          int predicates_in_this_team = KokkosExt::min(
+              predicates_per_team, n_predicates - predicate_start);
+
+          // just get the predicate from global, but load indexables from shared
+          ScratchIndexableType scratch_indexables(teamMember.team_scratch(0),
+                                                  indexables_per_team);
+
+          Kokkos::parallel_for(
+              Kokkos::TeamThreadRange(teamMember, predicates_in_this_team),
+              [&](int q) {
+
+                  // Predicate for this thread
+                  auto const &predicate = AccessPredicates::get(predicates, predicate_start + q);
+
+                  // Loop over primitive tiles
+                  for (int i=0; i<n_indexables; i+=indexables_per_team){
+
+                      int indexable_start = i;
+                      int indexables_in_this_team = KokkosExt::min(
+                      indexables_per_team, n_indexables - indexable_start);
+
+                      // Load a new tile of primitives into scratch
+                      Kokkos::parallel_for(
+                          Kokkos::TeamVectorRange(teamMember, indexables_in_this_team),
+                          [&](const int j) {
+                            scratch_indexables(j) = indexables(indexable_start + j);
+                         });
+                      teamMember.team_barrier();
+
+                      Kokkos::parallel_for(
+                          Kokkos::ThreadVectorRange(teamMember, indexables_in_this_team),
+                          [&](const int j) {
+                            auto const &indexable = scratch_indexables(j);
+                            if (predicate(indexable))
+                            {
+                              callback(predicate, values(indexable_start + j));
+                            }
+                          });
+                      teamMember.team_barrier();
+                  }
+              });
+        });
+  }
+
+  template <class ExecutionSpace, class Predicates, class Values,
+            class Indexables, class Callback>
+  static void query_noshared(ExecutionSpace const &space, Predicates const &predicates,
                     Values const &values, Indexables const &indexables,
                     Callback const &callback)
   {
