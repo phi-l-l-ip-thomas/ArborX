@@ -48,7 +48,7 @@ struct BruteForceImpl
 
   template <class ExecutionSpace, class Predicates, class Values,
             class Indexables, class Callback>
-  static void query_shared(ExecutionSpace const &space, Predicates const &predicates,
+  static void query(ExecutionSpace const &space, Predicates const &predicates,
                     Values const &values, Indexables const &indexables,
                     Callback const &callback)
   {
@@ -141,7 +141,7 @@ struct BruteForceImpl
 
   template <class ExecutionSpace, class Predicates, class Values,
             class Indexables, class Callback>
-  static void query_tc_expt(ExecutionSpace const &space, Predicates const &predicates,
+  static void query_gemm(ExecutionSpace const &space, Predicates const &predicates,
                     Values const &values, Indexables const &indexables,
                     Callback const &callback)
   {
@@ -280,7 +280,7 @@ struct BruteForceImpl
 
   template <class ExecutionSpace, class Predicates, class Values,
             class Indexables, class Callback>
-  static void query(ExecutionSpace const &space, Predicates const &predicates,
+  static void query_idxshared(ExecutionSpace const &space, Predicates const &predicates,
                     Values const &values, Indexables const &indexables,
                     Callback const &callback)
   {
@@ -301,7 +301,6 @@ struct BruteForceImpl
     // 10496 bytes - 16 bytes-static-shared-memory - 1044 bytes-driver-shared-memory = 9436 bytes-per-team
     int const predicates_per_team = 128;
     int const indexables_per_team = 32 * std::floor((float(9436) / float(sizeof(IndexableType)) / float(32)));
-//    int const indexables_per_team = 320;
 
     int const n_indexable_tiles =
         std::ceil((float)n_indexables / indexables_per_team);
